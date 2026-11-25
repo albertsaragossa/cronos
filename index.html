@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="ca">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Línia de temps interactiva</title>
+<style>
+:root{--bg:#0e1220;--fg:#e8ecf5}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:14px system-ui,sans-serif;overflow:hidden}
+header{position:fixed;top:0;left:0;right:0;padding:6px 8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;z-index:2}
+button{background:#1c2340;color:var(--fg);border:1px solid #333c60;border-radius:14px;padding:4px 10px;font:inherit;cursor:pointer}
+canvas{display:block;width:100%;height:100%;touch-action:none}
+#info{position:fixed;left:8px;right:8px;bottom:8px;background:#1c2340f0;border:1px solid #333c60;border-radius:10px;padding:8px 12px;display:none;max-width:560px}
+</style>
+</head>
+<body>
+<header id="bar"></header>
+<canvas id="c"></canvas>
+<div id="info"></div>
+<script src="data.js"></script>
+<script>
+const cv = document.getElementById('c'), ctx = cv.getContext('2d'), info = document.getElementById('info');
+const MAXA = 14.2e9, MINSPAN = 20;
+let W, H, dpr, a0 = MAXA, a1 = -7e8, hits = [];
+
+const g = v => +v.toPrecision(3);
+const yr = y => y > 0 ? String(y) : (1 - y) + " aC";
+function lbl(v) {
+  if (v < 1) return "avui";
+  return v >= 1e9 ? "fa " + g(v / 1e9) + " Ga" : v >= 1e6 ? "fa " + g(v / 1e6) + " Ma"
+    : v >= 3e4 ? "fa " + g(v / 1e3) + " ka" : yr(Math.round(2026 - v));
+}
+function tick(u, cal) {
+  if (cal) return yr(Math.round(u));
+  return u >= 1e9 ? g(u / 1e9) + " Ga" : u >= 1e6 ? g(u / 1e6) + " Ma" : u >= 1e3 ? g(u / 1e3) + " ka" : String(g(u));
+}
+function clamp() {
+  const sp = a0 - a1;
+  if (a0 > MAXA) { a1 -= a0 - MAXA; a0 = MAXA; }
+  if (a1 < -0.05 * sp) { a0 -= a1 + 0.05 * sp; a1 = -0.05 * sp; }
+}
+function zoom(f, cx) {
+  const sp = a0 - a1, av = a0 - cx / W * sp;
+  const ns = Math.min(Math.max(sp * f, MINSPAN), MAXA * 1.05);
+  a0 = av + cx / W * ns; a1 = a0 - ns; clamp(); draw();
+}
+function go(a, b) { a0 = a; a1 = b; clamp(); draw(); }
+
+function draw() {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H); hits = [];
+  const sp = a0 - a1, X = a => (a0 - a) / sp * W, cal = sp < 3e4;
+  const lo = cal ? 2026 - a0 : a1, hi = cal ? 2026 - a1 : a0;
+  const raw = sp / (W / 110), p = 10 ** Math.floor(Math.log10(raw)), m = raw / p;
+  const st = (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * p;
+  ctx.font = "11px system-ui"; ctx.textAlign = "center";
+  for (let u = Math.ceil(lo / st) * st; u <= hi; u += st) {
+    if (cal && Math.round(u) === 0) continue;
+    const x = X(cal ? 2026 - u : u);
+    ctx.strokeStyle = "#252b40"; ctx.beginPath(); ctx.moveTo(x, 58); ctx.lineTo(x, H); ctx.stroke();
+    ctx.fillStyle = "#8a93ab"; ctx.fillText(tick(u, cal), x, 52);
+  }
+  ctx.textAlign = "left"; ctx.fillStyle = "#8a93ab";
+  ctx.fillText(cal ? "Any" : "Anys enrere", 8, 52);
+  const th = Math.max(96, Math.min(130, (H - 70) / TRACKS.length));
+  TRACKS.forEach((t, i) => {
+    const y = 64 + i * th, last = [-1e9, -1e9]; let k = 0;
+    ctx.font = "bold 12px system-ui"; ctx.fillStyle = t.color; ctx.fillText(t.name, 8, y + 12);
+    ctx.font = "11px system-ui";
+    t.items.forEach(it => {
+      if (it.e == null) {
+        const x = X(it.s); if (x < -5 || x > W + 5) return;
+        ctx.fillStyle = t.color; ctx.beginPath(); ctx.arc(x, y + 62, 5, 0, 7); ctx.fill();
+        hits.push({ x1: x - 10, x2: x + 10, y1: y + 50, y2: y + 74, it });
+        const w = ctx.measureText(it.n).width, r = last[0] < x ? 0 : last[1] < x ? 1 : -1;
+        if (r >= 0) { last[r] = x + w + 14; ctx.fillStyle = "#e8ecf5"; ctx.fillText(it.n, x + 8, y + (r ? 88 : 66)); }
+      } else {
+        const x1 = X(it.s), x2 = X(it.e); if (x2 < 0 || x1 > W) return;
+        const a = Math.max(x1, 0), b = Math.min(x2, W);
+        ctx.fillStyle = t.color + (k++ % 2 ? "66" : "99");
+        ctx.fillRect(a, y + 20, Math.max(b - a, 1), 26);
+        hits.push({ x1: a, x2: b, y1: y + 20, y2: y + 46, it });
+        if (b - a > 40) {
+          ctx.save(); ctx.beginPath(); ctx.rect(a, y + 20, b - a, 26); ctx.clip();
+          ctx.fillStyle = "#fff"; ctx.fillText(it.n, a + 5, y + 37); ctx.restore();
+        }
+      }
+    });
+  });
+}
+
+function resize() {
+  dpr = window.devicePixelRatio || 1; W = innerWidth; H = innerHeight;
+  cv.width = W * dpr; cv.height = H * dpr; draw();
+}
+addEventListener('resize', resize);
+
+cv.addEventListener('wheel', e => { e.preventDefault(); zoom(Math.exp(e.deltaY * 0.0015), e.clientX); }, { passive: false });
+const P = new Map(); let moved = 0, lastD = 0;
+cv.onpointerdown = e => { cv.setPointerCapture(e.pointerId); P.set(e.pointerId, [e.clientX, e.clientY]); moved = 0; lastD = 0; };
+cv.onpointermove = e => {
+  if (!P.has(e.pointerId)) return;
+  const o = P.get(e.pointerId);
+  P.set(e.pointerId, [e.clientX, e.clientY]);
+  if (P.size === 1) {
+    const sh = (e.clientX - o[0]) / W * (a0 - a1);
+    a0 += sh; a1 += sh; moved += Math.abs(e.clientX - o[0]) + Math.abs(e.clientY - o[1]); clamp(); draw();
+  } else if (P.size === 2) {
+    const [p, q] = [...P.values()], d = Math.abs(p[0] - q[0]) || 1;
+    if (lastD) zoom(lastD / d, (p[0] + q[0]) / 2);
+    lastD = d; moved = 99;
+  }
+};
+cv.onpointerup = e => { P.delete(e.pointerId); lastD = 0; if (moved < 6) pick(e); };
+cv.onpointercancel = e => { P.delete(e.pointerId); lastD = 0; };
+
+function pick(e) {
+  const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  const h = hits.find(h => x >= h.x1 && x <= h.x2 && y >= h.y1 && y <= h.y2);
+  if (!h) { info.style.display = "none"; return; }
+  const i = h.it;
+  info.innerHTML = `<b>${i.n}</b><br><small>${lbl(i.s)}${i.e != null ? " → " + lbl(i.e) : ""}</small><br>${i.d || ""}`;
+  info.style.display = "block";
+}
+
+const bar = document.getElementById('bar');
+[["Univers", 14.2e9, -7e8], ["Terra", 4.8e9, -2e8], ["Fanerozoic", 5.6e8, -2.5e7],
+ ["Humanitat", 3.5e6, -1.7e5], ["Història", 6000, -300]].forEach(([n, a, b]) => {
+  const el = document.createElement('button'); el.textContent = n; el.onclick = () => go(a, b); bar.append(el);
+});
+[["+", 0.5], ["−", 2]].forEach(([n, f]) => {
+  const el = document.createElement('button'); el.textContent = n; el.onclick = () => zoom(f, W / 2); bar.append(el);
+});
+resize();
+</script>
+</body>
+</html>
